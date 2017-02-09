@@ -13,7 +13,7 @@ DFLAGS = -g
 default: echo_server echo_client
 
 echo_server: echo_server.c
-	gcc echo_server.c -o lisod ${CFLAGS}
+	gcc echo_server.c readline.c -o lisod ${CFLAGS}
 
 echo_client: echo_client.c
 	gcc echo_client.c -o $@ ${CFLAGS}

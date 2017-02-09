@@ -13,7 +13,7 @@ DFLAGS = -g
 default: echo_server echo_client
 
 echo_server: echo_server.c
-	gcc echo_server.c -o $@  ${CFLAGS}
+	gcc echo_server.c -o lisod ${CFLAGS}
 
 echo_client: echo_client.c
 	gcc echo_client.c -o $@ ${CFLAGS}
@@ -22,5 +22,7 @@ debug: CFlAGS += -g
 debug: CFLAGS += -g
 debug: echo_server echo_client
 
+handin:
+	tar cvf ../handin.tar ../15-441-project-1
 clean:
 	rm echo_server echo_client

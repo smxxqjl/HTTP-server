@@ -11,6 +11,7 @@
  *                                                                             *
  *******************************************************************************/
 
+#include <ctype.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <stdio.h>
@@ -40,7 +41,7 @@
 #define CONNECT 7
 #define UNKNOWN 8
 
-#define ECHO_PORT 9999
+#define LISO_PORT 5472
 #define BUF_SIZE 4096
 // Maximum number of file descriptor that server can handle
 
@@ -135,7 +136,7 @@ void implement_get(int connfd, char *requestline)
             snprintf(header, MAXREQUEST, "HTTP/1.0 200 OK \r\n"
                     "MIME-Version: 1.0\r\n"
                     "Date: %s\r\n"
-                    "Server: hkh/1.1\r\n"
+                    "Server: lisod/1.1\r\n"
                     "Content-length: %d\r\n"
                     "Content-Type: text/html; charset=utf-8\r\n"
                     "Trasfer-Encoding: chunked\r\n"
@@ -212,10 +213,23 @@ void request_handle(int connfd)
 
 int main(int argc, char* argv[])
 {
-    int sock, client_sock, i, maxi, maxfd, nready;
+    int sock, client_sock, i, maxi, maxfd, nready, lport;
     socklen_t cli_size;
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
+    
+    lport = LISO_PORT;
+    if (argc >= 2) {
+        int len = strlen(argv[1]);
+        for (i = 0; i < len; i++) {
+            if (!isdigit(argv[1][i])) {
+                fprintf(stderr, "Unavailable port argv %s Using default port %d",
+                        argv[1], lport);
+            }
+        }
+        if (i == len)
+            lport = atoi(argv[1]);
+    }
 
     int client[FD_SETSIZE];
     for (i = 0; i < FD_SETSIZE; i++)
@@ -229,7 +243,7 @@ int main(int argc, char* argv[])
     }
 
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(ECHO_PORT);
+    addr.sin_port = htons(lport);
     addr.sin_addr.s_addr = INADDR_ANY;
 
     /* servers bind sockets to ports---notify the OS they accept connections */

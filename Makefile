@@ -10,10 +10,10 @@
 CFLAGS = -Wall -Werror
 DFLAGS = -g
 
-default: echo_server echo_client
+default: liso echo_client
 
-echo_server: echo_server.c
-	gcc echo_server.c readline.c -o lisod ${CFLAGS}
+liso: liso_server.c
+	gcc liso_server.c readline.c -o lisod ${CFLAGS}
 
 echo_client: echo_client.c
 	gcc echo_client.c -o $@ ${CFLAGS}

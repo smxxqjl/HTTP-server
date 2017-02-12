@@ -41,7 +41,7 @@
 #define CONNECT 7
 #define UNKNOWN 8
 
-#define LISO_PORT 5472
+#define LISO_PORT 9999
 #define BUF_SIZE 4096
 // Maximum number of file descriptor that server can handle
 
@@ -149,6 +149,7 @@ void implement_get(int connfd, char *requestline)
             abnormal_response(connfd, 401, reason);
         }
     }
+    close(connfd);
 }
 
 #define MAXPATH 255
@@ -213,11 +214,11 @@ void request_handle(int connfd)
 
 int main(int argc, char* argv[])
 {
-    int sock, client_sock, i, maxi, maxfd, nready, lport;
+    int sock, client_sock, i, maxi, maxfd, nready, lport, reuse;
     socklen_t cli_size;
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
-    
+
     lport = LISO_PORT;
     if (argc >= 2) {
         int len = strlen(argv[1]);
@@ -241,7 +242,9 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Failed creating socket.\n");
         return EXIT_FAILURE;
     }
-
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(int)) == -1) {                                                                               
+        perror("resuse error\n");
+    } 
     addr.sin_family = AF_INET;
     addr.sin_port = htons(lport);
     addr.sin_addr.s_addr = INADDR_ANY;

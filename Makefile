@@ -20,7 +20,7 @@ echo_client: echo_client.c
 
 debug: CFlAGS += -g
 debug: CFLAGS += -g
-debug: echo_server echo_client
+debug: liso echo_client
 
 handin:
 	tar cvf ../handin.tar ../15-441-project-1

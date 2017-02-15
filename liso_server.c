@@ -73,7 +73,7 @@ void abnormal_response(int connfd, int status_code, char *reason)
 
 #define MAXPATH 255
 #define MAXBUF 1024
-static int accesslog;
+FILE *accesslog;
 void implement_get(int connfd, char *requestline)
 {
     int i, j, cgi_re, content_len, wfilefd;
@@ -98,7 +98,8 @@ void implement_get(int connfd, char *requestline)
     if (j != 0) {
         path[j--] = '\0';
         while(path[j--] != '/' && j >= 0);
-        path[++j] = '\0';
+        if (path[j] == '/')
+            path[++j] = '\0';
         if (chdir(path) != 0)
             not_found(connfd);
 
@@ -168,8 +169,8 @@ void request_handle(int connfd)
 
     readfeedline(connfd, line, MAXLINE);  
     printf("Here comes the request line\n");
-    printf("%s\n", line);
-    write(accesslog, line, strlen(line));
+    fprintf(accesslog, "%s", line);
+    fflush(accesslog);
     i = 0;
     while(line[i] != ' ' && line[i] != '\0' && i < MAXMETHOD) {
         method[i] = line[i];
@@ -227,8 +228,8 @@ int main(int argc, char* argv[])
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
 
-    accesslog = open("access.log", O_CREAT, S_IRWXU | S_IRGRP | S_IXOTH);
-    if (accesslog == -1) {
+    accesslog = fopen("access.log", "w+");
+    if (accesslog == NULL) {
         perror("open log fille access.log error");
     }
     lport = LISO_PORT;

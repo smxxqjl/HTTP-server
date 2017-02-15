@@ -73,6 +73,7 @@ void abnormal_response(int connfd, int status_code, char *reason)
 
 #define MAXPATH 255
 #define MAXBUF 1024
+static int accesslog;
 void implement_get(int connfd, char *requestline)
 {
     int i, j, cgi_re, content_len, wfilefd;
@@ -149,6 +150,11 @@ void implement_get(int connfd, char *requestline)
             abnormal_response(connfd, 401, reason);
         }
     }
+    printf("Read the remain header line\n");
+    while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
+        printf("one\n");
+    }
+    printf("Close connfd\n");
     close(connfd);
 }
 
@@ -161,12 +167,14 @@ void request_handle(int connfd)
     int i, methodtype;
 
     readfeedline(connfd, line, MAXLINE);  
+    printf("Here comes the request line\n");
+    printf("%s\n", line);
+    write(accesslog, line, strlen(line));
     i = 0;
     while(line[i] != ' ' && line[i] != '\0' && i < MAXMETHOD) {
         method[i] = line[i];
         i++;
     }
-    printf("%s\n", method);
     if(i == MAXMETHOD)
         methodtype = UNKNOWN;
     else {
@@ -219,6 +227,10 @@ int main(int argc, char* argv[])
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
 
+    accesslog = open("access.log", O_CREAT, S_IRWXU | S_IRGRP | S_IXOTH);
+    if (accesslog == -1) {
+        perror("open log fille access.log error");
+    }
     lport = LISO_PORT;
     if (argc >= 2) {
         int len = strlen(argv[1]);

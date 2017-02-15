@@ -12,14 +12,13 @@ DFLAGS = -g
 
 default: liso echo_client
 
-liso: liso_server.c
+liso: liso_server.c readline.c
 	gcc liso_server.c readline.c -o lisod ${CFLAGS}
 
 echo_client: echo_client.c
 	gcc echo_client.c -o $@ ${CFLAGS}
 
 debug: CFlAGS += -g
-debug: CFLAGS += -g
 debug: liso echo_client
 
 handin:

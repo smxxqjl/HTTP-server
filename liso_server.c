@@ -156,6 +156,88 @@ void implement_get(int connfd, char *requestline)
     close(connfd);
 }
 
+void implement_head(int connfd, char *requestline)
+{
+    int i, j, cgi_re, content_len, wfilefd;
+    char path[MAXPATH], *index_file, *cgi_name, *reason, readbuf[MAXBUF], header[MAXREQUEST], *currenttime;
+    cgi_name = "/cgi";
+    i = j = 0;
+
+    /* Ignore method and space */
+    while(requestline[i++] != ' ');
+    i++;
+
+    /* parse if it's cgi */
+    if (strncmp(path, cgi_name, strlen(cgi_name)) == 0)
+        cgi_re = 1;
+    else
+        cgi_re = 0;
+
+    while(requestline[i] != ' ') {
+        path[j++] = requestline[i++];
+    }
+    path[j] = '\0';
+
+    for(i = 0; i < j; i++) {
+        if (path[i] != '/')
+            break;
+    }
+    if (i == j)
+        index_file = "index.html";
+    else
+        index_file = path+i;
+
+    /* check permission and write back response */
+    reason = "Unauthorized";
+    if (access(index_file, F_OK) != 0)
+        abnormal_response(connfd, 401, reason);
+    if (cgi_re) {
+        if (access(index_file, X_OK) && (fork() == 0)) {
+            return;
+        }
+        else
+            abnormal_response(connfd, 401, reason);
+    }
+    else {
+        struct stat buf;
+        if (access(index_file, R_OK) == 0 && (wfilefd = open(index_file, O_RDONLY)) != -1) {
+            fstat(wfilefd, &buf);
+            content_len = buf.st_size;
+
+            /* This time get code may be bugy when race condition occurs */
+            time_t temptp;
+            time(&temptp);
+            currenttime = asctime(gmtime(&temptp));
+            currenttime[strlen(currenttime) - 1] = '\0';
+            int offset, headerlen;
+            snprintf(header, MAXREQUEST, "HTTP/1.0 200 OK \r\n"
+                    "MIME-Version: 1.0\r\n"
+                    "Date: %s\r\n"
+                    "Server: lisod/1.1\r\n"
+                    "Content-length: %d\r\n"
+                    "Content-Type: text/html; charset=utf-8\r\n"
+                    "Trasfer-Encoding: chunked\r\n"
+                    "\r\n",
+                    currenttime,content_len);
+            headerlen = strlen(header);
+            offset = 0;
+            while (offset != headerlen)
+                offset += write(connfd, header, headerlen);
+            /* This is where the HEAD method differs from GET method 
+            while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
+                write(connfd, readbuf, readnum);
+                */
+        }
+        else {
+            abnormal_response(connfd, 401, reason);
+        }
+    }
+    printf("Read the remain header line\n");
+    while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
+        printf("one\n");
+    }
+    close(connfd);
+}
 
 #define MAXPATH 255
 #define MAXBUF 1024
@@ -202,6 +284,8 @@ void request_handle(int connfd)
             implement_get(connfd, line);
             break;
         case HEAD:
+            implement_head(connfd, line);
+            break;
         case OPTIONS:
         case POST:
         case PUT:

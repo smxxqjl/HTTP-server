@@ -91,26 +91,19 @@ void implement_get(int connfd, char *requestline)
     else
         cgi_re = 0;
 
-    /* Get the file path and change dir into it */
     while(requestline[i] != ' ') {
         path[j++] = requestline[i++];
     }
-    if (j != 0) {
-        path[j--] = '\0';
-        while(path[j--] != '/' && j >= 0);
-        if (path[j] == '/')
-            path[++j] = '\0';
-        if (chdir(path) != 0)
-            not_found(connfd);
+    path[j] = '\0';
 
-        /* set file name, if not specified make it index.html */
-        if (path[j+1] == '\0')
-            index_file = "index.html";
-        else
-            index_file = path + j + 1;
+    for(i = 0; i < j; i++) {
+        if (path[i] != '/')
+            break;
     }
-    else
+    if (i == j)
         index_file = "index.html";
+    else
+        index_file = path+i;
 
     /* check permission and write back response */
     reason = "Unauthorized";

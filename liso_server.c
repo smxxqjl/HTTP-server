@@ -128,6 +128,7 @@ void implement_get(int connfd, char *requestline)
             time(&temptp);
             currenttime = asctime(gmtime(&temptp));
             currenttime[strlen(currenttime) - 1] = '\0';
+            int offset, headerlen;
             snprintf(header, MAXREQUEST, "HTTP/1.0 200 OK \r\n"
                     "MIME-Version: 1.0\r\n"
                     "Date: %s\r\n"
@@ -137,6 +138,10 @@ void implement_get(int connfd, char *requestline)
                     "Trasfer-Encoding: chunked\r\n"
                     "\r\n",
                     currenttime,content_len);
+            headerlen = strlen(header);
+            offset = 0;
+            while (offset != headerlen)
+                offset += write(connfd, header, headerlen);
             while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
                 write(connfd, readbuf, readnum);
         }
@@ -148,9 +153,9 @@ void implement_get(int connfd, char *requestline)
     while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
         printf("one\n");
     }
-    printf("Close connfd\n");
     close(connfd);
 }
+
 
 #define MAXPATH 255
 #define MAXBUF 1024
@@ -196,8 +201,8 @@ void request_handle(int connfd)
         case GET:
             implement_get(connfd, line);
             break;
-        case OPTIONS:
         case HEAD:
+        case OPTIONS:
         case POST:
         case PUT:
         case DELETE:

@@ -68,7 +68,7 @@ void abnormal_response(int connfd, int status_code, char *reason)
     snprintf(response, MAXERROR, "HTTP/1.0 %d %s\r\n"
             "\r\n"
             ,status_code, reason);
-    write(connfd, response, strlen(response));
+    writen(connfd, response, strlen(response));
 }
 
 #define MAXPATH 255
@@ -78,6 +78,7 @@ void implement_get(int connfd, char *requestline)
 {
     int i, j, cgi_re, content_len, wfilefd;
     char path[MAXPATH], *index_file, *cgi_name, *reason, readbuf[MAXBUF], header[MAXREQUEST], *currenttime;
+    char *modifiedtime;
     cgi_name = "/cgi";
     i = j = 0;
 
@@ -128,31 +129,30 @@ void implement_get(int connfd, char *requestline)
             time(&temptp);
             currenttime = asctime(gmtime(&temptp));
             currenttime[strlen(currenttime) - 1] = '\0';
-            int offset, headerlen;
-            snprintf(header, MAXREQUEST, "HTTP/1.0 200 OK \r\n"
+            modifiedtime = ctime(&(buf.st_mtim.tv_sec));
+            modifiedtime[strlen(modifiedtime) - 1] = '\0';
+            snprintf(header, MAXREQUEST, "HTTP/1.1 200 OK \r\n"
                     "MIME-Version: 1.0\r\n"
                     "Date: %s\r\n"
+                    "Last-Modified: %s\r\n"
                     "Server: liso/1.0\r\n"
                     "Content-length: %d\r\n"
                     "Content-Type: text/html; charset=utf-8\r\n"
                     "Trasfer-Encoding: chunked\r\n"
+                    "Connection: close\r\n"
                     "\r\n",
-                    currenttime,content_len);
+                    currenttime, modifiedtime,content_len);
+            int headerlen;
             headerlen = strlen(header);
-            offset = 0;
-            while (offset != headerlen)
-                offset += write(connfd, header, headerlen);
+            writen(connfd, header, headerlen);
             while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
-                write(connfd, readbuf, readnum);
+                writen(connfd, readbuf, readnum);
         }
         else {
             abnormal_response(connfd, 401, reason);
         }
     }
-    printf("Read the remain header line\n");
-    while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
-        printf("one\n");
-    }
+    while(readfeedline(connfd, readbuf, MAXBUF) > 2);
     close(connfd);
 }
 
@@ -160,6 +160,7 @@ void implement_head(int connfd, char *requestline)
 {
     int i, j, cgi_re, content_len, wfilefd;
     char path[MAXPATH], *index_file, *cgi_name, *reason, readbuf[MAXBUF], header[MAXREQUEST], *currenttime;
+    char *modifiedtime;
     cgi_name = "/cgi";
     i = j = 0;
 
@@ -207,18 +208,23 @@ void implement_head(int connfd, char *requestline)
             /* This time get code may be bugy when race condition occurs */
             time_t temptp;
             time(&temptp);
+
+            modifiedtime = ctime(&(buf.st_mtim.tv_sec));
+            modifiedtime[strlen(modifiedtime) - 1] = '\0';
             currenttime = asctime(gmtime(&temptp));
             currenttime[strlen(currenttime) - 1] = '\0';
             int offset, headerlen;
-            snprintf(header, MAXREQUEST, "HTTP/1.0 200 OK \r\n"
+            snprintf(header, MAXREQUEST, "HTTP/1.1 200 OK \r\n"
                     "MIME-Version: 1.0\r\n"
                     "Date: %s\r\n"
+                    "Last-Modified: %s\r\n"
                     "Server: liso/1.0\r\n"
                     "Content-length: %d\r\n"
                     "Content-Type: text/html; charset=utf-8\r\n"
                     "Trasfer-Encoding: chunked\r\n"
+                    "Connection: Close\r\n"
                     "\r\n",
-                    currenttime,content_len);
+                    currenttime,modifiedtime,content_len);
             headerlen = strlen(header);
             offset = 0;
             while (offset != headerlen)
@@ -248,7 +254,6 @@ void request_handle(int connfd)
     int i, methodtype;
 
     readfeedline(connfd, line, MAXLINE);  
-    printf("Here comes the request line\n");
     fprintf(accesslog, "%s", line);
     fflush(accesslog);
     i = 0;

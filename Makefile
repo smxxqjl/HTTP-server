@@ -26,3 +26,7 @@ handin:
 	tar cvf ../handin.tar ../15-441-project-1
 clean:
 	rm lisod echo_client
+
+checkpoint2:
+	git tag -d checkpoint-2
+	git tag -a checkpoint-2 HEAD

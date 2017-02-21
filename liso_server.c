@@ -25,9 +25,12 @@
 #include "readline.h"
 #include <fcntl.h>
 #include <time.h>
+#include "hash.h"
+#include "strloc.h"
 
 #define CRLF "\r\n"
 #define MAXREQUEST 8192
+#define MAXLINE 1024
 
 /* The longest method name is 6 char hence include null terminator we make it 7 */
 #define MAXMETHOD 8
@@ -60,6 +63,7 @@ int close_socket(int sock)
     return 0;
 }
 
+
 #define MAXERROR 2048
 void abnormal_response(int connfd, int status_code, char *reason)
 {
@@ -69,6 +73,23 @@ void abnormal_response(int connfd, int status_code, char *reason)
             "\r\n"
             ,status_code, reason);
     writen(connfd, response, strlen(response));
+}
+
+void install_mime()
+{
+    int i;
+
+    int extnum = 12;
+    char *ext[] = {"javascript", "json", "pdf", "xml", "zip", "mpeg", "vorbis", "css", "html", "png", "jpeg", "gif"};
+    char *retype[] = {"application/javascript", "application/json", "application/pdf", "application/xml",
+        "application/zip", "audio/mpeg", "audio/vorbis", "text/css", "text/html", "image/png", "image/jpeg",
+        "image/gif"
+    };
+
+    for (i = 0; i < extnum; i++) {
+        if (install(ext[i], retype[i]) == NULL)
+            fprintf(stderr, "error while install %s: %s\n", ext[i], retype[i]);
+    }
 }
 
 #define MAXPATH 255
@@ -129,6 +150,20 @@ void implement_get(int connfd, char *requestline)
             time(&temptp);
             currenttime = asctime(gmtime(&temptp));
             currenttime[strlen(currenttime) - 1] = '\0';
+
+            /* Get extension of file name to fill content-type header */
+            for(i = strlen(index_file) - 1; i >= 0; i--)
+                if (index_file[i] == '.')
+                    break;
+
+            char *ext = index_file+i+1;
+            struct nlist *type = lookup(ext);
+            char mime_name[MAXLINE];
+            if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
+                strcpy(mime_name, "application/octet-stream");
+            else
+                strcpy(mime_name, type->defn);
+
             modifiedtime = ctime(&(buf.st_mtim.tv_sec));
             modifiedtime[strlen(modifiedtime) - 1] = '\0';
             snprintf(header, MAXREQUEST, "HTTP/1.1 200 OK \r\n"
@@ -137,11 +172,11 @@ void implement_get(int connfd, char *requestline)
                     "Last-Modified: %s\r\n"
                     "Server: liso/1.0\r\n"
                     "Content-length: %d\r\n"
-                    "Content-Type: text/html; charset=utf-8\r\n"
+                    "Content-Type: %s\r\n"
                     "Trasfer-Encoding: chunked\r\n"
                     "Connection: close\r\n"
                     "\r\n",
-                    currenttime, modifiedtime,content_len);
+                    currenttime, modifiedtime, content_len, mime_name);
             int headerlen;
             headerlen = strlen(header);
             writen(connfd, header, headerlen);
@@ -152,6 +187,28 @@ void implement_get(int connfd, char *requestline)
             abnormal_response(connfd, 401, reason);
         }
     }
+
+    int contentlen;
+    contentlen = 0;
+    while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
+        strtolower(readbuf);
+        if (startwith(readbuf, "content-length:")) {
+            char *lenstr = strchr(readbuf, ':');
+            *lenstr = '\0';
+            lenstr++;
+            lenstr = igspace(lenstr);
+            char *p = strchr(lenstr, '\n');
+            *p = '\0';
+            if (strlen(lenstr) == 0 || !isinteger(lenstr)) {
+                fprintf(stderr, "Bad Header\n %s\n", lenstr);
+                continue;
+            } else {
+                contentlen = atoi(lenstr);
+            }
+        }
+    }
+    read(connfd, readbuf, contentlen);
+
     while(readfeedline(connfd, readbuf, MAXBUF) > 2);
     close(connfd);
 }
@@ -209,6 +266,19 @@ void implement_head(int connfd, char *requestline)
             time_t temptp;
             time(&temptp);
 
+            /* Get extension of file name to fill content-type header */
+            for(i = strlen(index_file) - 1; i >= 0; i--)
+                if (index_file[i] == '.')
+                    break;
+
+            char *ext = index_file+i+1;
+            struct nlist *type = lookup(ext);
+            char mime_name[MAXLINE];
+            if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
+                strcpy(mime_name, "application/octet-stream");
+            else
+                strcpy(mime_name, type->defn);
+
             modifiedtime = ctime(&(buf.st_mtim.tv_sec));
             modifiedtime[strlen(modifiedtime) - 1] = '\0';
             currenttime = asctime(gmtime(&temptp));
@@ -220,28 +290,41 @@ void implement_head(int connfd, char *requestline)
                     "Last-Modified: %s\r\n"
                     "Server: liso/1.0\r\n"
                     "Content-length: %d\r\n"
-                    "Content-Type: text/html; charset=utf-8\r\n"
+                    "Content-Type: %s\r\n"
                     "Trasfer-Encoding: chunked\r\n"
                     "Connection: Close\r\n"
                     "\r\n",
-                    currenttime,modifiedtime,content_len);
+                    currenttime,modifiedtime,content_len, mime_name);
             headerlen = strlen(header);
             offset = 0;
             while (offset != headerlen)
                 offset += write(connfd, header, headerlen);
-            /* This is where the HEAD method differs from GET method 
-            while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
-                write(connfd, readbuf, readnum);
-                */
         }
         else {
             abnormal_response(connfd, 401, reason);
         }
     }
     printf("Read the remain header line\n");
+    int contentlen;
+    contentlen = 0;
     while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
-        printf("one\n");
+        strtolower(readbuf);
+        if (startwith(readbuf, "content-length:")) {
+            char *lenstr = strchr(readbuf, ':');
+            *lenstr = '\0';
+            lenstr++;
+            lenstr = igspace(lenstr);
+            char *p = strchr(lenstr, '\n');
+            *p = '\0';
+            if (strlen(lenstr) == 0 || !isinteger(lenstr)) {
+                fprintf(stderr, "Bad Header\n %s\n", lenstr);
+                continue;
+            } else {
+                contentlen = atoi(lenstr);
+            }
+        }
     }
+    read(connfd, readbuf, contentlen);
     close(connfd);
 }
 
@@ -332,6 +415,7 @@ int main(int argc, char* argv[])
             lport = atoi(argv[1]);
     }
 
+    install_mime();
     int client[FD_SETSIZE];
     for (i = 0; i < FD_SETSIZE; i++)
         client[i] = -1;

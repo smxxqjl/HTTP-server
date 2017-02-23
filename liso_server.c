@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "readline.h"
 #include <fcntl.h>
@@ -92,27 +93,44 @@ void install_mime()
     }
 }
 
+void serve_dynamic(int connfd, char *exepath, char *header)
+{
+    int pid;
+
+    writen(connfd, header, strlen(header));
+    if ((pid = fork()) == 0) {
+        dup2(connfd, STDOUT_FILENO);
+        setenv("SERVER_SOFTWARE", "Liso/1.0", 1);
+        execl(exepath, exepath, NULL);
+        abnormal_response(connfd, 500, "Internal Server Error");
+    }
+    wait(NULL);
+}
+
+/*
+ * printheader return a header character string, and end with a blank /r/n line
+ * contentlen parameter used to fill Content-Length with the value. And if negative value
+ * is given, no Content-Length header line will be produced.
+ */
+char *printheader(int contentlen)
+{
+    return NULL;
+}
+
 #define MAXPATH 255
 #define MAXBUF 1024
 FILE *accesslog;
-
 void method_handle(int connfd, char *requestline, int method)
 {
-    int i, j, cgi_re, content_len, wfilefd;
-    char path[MAXPATH], *index_file, *cgi_name, *reason, readbuf[MAXBUF], header[MAXREQUEST], *currenttime;
+    int i, j, content_len, wfilefd;
+    char path[MAXPATH], *index_file, *reason, readbuf[MAXBUF], header[MAXREQUEST], *currenttime;
     char *modifiedtime;
-    cgi_name = "/cgi";
     i = j = 0;
 
+    printf("Request:%s\n", requestline);
     /* Ignore method and space */
     while(requestline[i++] != ' ');
     i++;
-
-    /* parse if it's cgi */
-    if (strncmp(path, cgi_name, strlen(cgi_name)) == 0)
-        cgi_re = 1;
-    else
-        cgi_re = 0;
 
     while(requestline[i] != ' ') {
         path[j++] = requestline[i++];
@@ -132,38 +150,15 @@ void method_handle(int connfd, char *requestline, int method)
     reason = "Unauthorized";
     if (access(index_file, F_OK) != 0)
         abnormal_response(connfd, 404, reason);
-    if (cgi_re) {
-        if (access(index_file, X_OK) && (fork() == 0)) {
-            return;
-        }
-        else
-            abnormal_response(connfd, 404, reason);
-    }
     else {
         struct stat buf;
         if (access(index_file, R_OK) == 0 && (wfilefd = open(index_file, O_RDONLY)) != -1) {
-            int readnum;
-            fstat(wfilefd, &buf);
-            content_len = buf.st_size;
 
             /* This time get code may be bugy when race condition occurs */
             time_t temptp;
             time(&temptp);
             currenttime = asctime(gmtime(&temptp));
             currenttime[strlen(currenttime) - 1] = '\0';
-
-            /* Get extension of file name to fill content-type header */
-            for(i = strlen(index_file) - 1; i >= 0; i--)
-                if (index_file[i] == '.')
-                    break;
-
-            char *ext = index_file+i+1;
-            struct nlist *type = lookup(ext);
-            char mime_name[MAXLINE];
-            if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
-                strcpy(mime_name, "application/octet-stream");
-            else
-                strcpy(mime_name, type->defn);
 
             modifiedtime = ctime(&(buf.st_mtim.tv_sec));
             modifiedtime[strlen(modifiedtime) - 1] = '\0';
@@ -172,18 +167,41 @@ void method_handle(int connfd, char *requestline, int method)
                     "Date: %s\r\n"
                     "Last-Modified: %s\r\n"
                     "Server: liso/1.0\r\n"
-                    "Content-length: %d\r\n"
-                    "Content-Type: %s\r\n"
                     "Trasfer-Encoding: chunked\r\n"
-                    "Connection: close\r\n"
-                    "\r\n",
-                    currenttime, modifiedtime, content_len, mime_name);
+                    "Connection: close\r\n",
+                    currenttime, modifiedtime);
             int headerlen;
             headerlen = strlen(header);
-            writen(connfd, header, headerlen);
-            if (method == GET || method == POST)
-                while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
-                    writen(connfd, readbuf, readnum);
+            if (method == GET || method == POST) {
+                if (startwith(index_file, "cgi")) {
+                    serve_dynamic(connfd, index_file, header);
+                } else {
+                    int readnum;
+                    fstat(wfilefd, &buf);
+                    content_len = buf.st_size;
+                    /* Get extension of file name to fill content-type header */
+                    for(i = strlen(index_file) - 1; i >= 0; i--)
+                        if (index_file[i] == '.')
+                            break;
+
+                    char *ext = index_file+i+1;
+                    struct nlist *type = lookup(ext);
+                    char mime_name[MAXLINE];
+                    if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
+                        strncpy(mime_name, "application/octet-stream", MAXLINE);
+                    else
+                        strncpy(mime_name, type->defn, MAXLINE);
+
+                    snprintf(header + headerlen, MAXREQUEST - headerlen,
+                            "Content-Length: %d\r\n"
+                            "Content-Type: %s\r\n"
+                            "\r\n", content_len, mime_name);
+                    writen(connfd, header, strlen(header));
+                    while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
+                        writen(connfd, readbuf, readnum);
+                }
+
+            }
         }
         else {
             abnormal_response(connfd, 404, reason);
@@ -315,7 +333,8 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Failed creating socket.\n");
         return EXIT_FAILURE;
     }
-    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(int)) == -1) {                                                                               
+    if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&reuse, sizeof(int)) == -1)
+    {                                                                               
         perror("resuse error\n");
     } 
     addr.sin_family = AF_INET;

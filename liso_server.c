@@ -119,13 +119,14 @@ char *printheader(int contentlen)
 
 #define MAXPATH 255
 #define MAXBUF 1024
+#define MAXTIME 50
 FILE *accesslog;
 void method_handle(int connfd, char *requestline, int method)
 {
-    int i, j, content_len, wfilefd;
-    char path[MAXPATH], *index_file, *reason, readbuf[MAXBUF], header[MAXREQUEST], *currenttime;
-    char *modifiedtime;
-    i = j = 0;
+    int i, j, content_len, wfilefd, endconnect;
+    char path[MAXPATH], *index_file, *reason, readbuf[MAXBUF], header[MAXREQUEST], currenttime[MAXTIME];
+    char modifiedtime[MAXTIME];
+    i = j = endconnect = 0;
 
     printf("Request:%s\n", requestline);
     /* Ignore method and space */
@@ -153,22 +154,20 @@ void method_handle(int connfd, char *requestline, int method)
     else {
         struct stat buf;
         if (access(index_file, R_OK) == 0 && (wfilefd = open(index_file, O_RDONLY)) != -1) {
-
-            /* This time get code may be bugy when race condition occurs */
             time_t temptp;
             time(&temptp);
-            currenttime = asctime(gmtime(&temptp));
+            fstat(wfilefd, &buf);
+            strncpy(currenttime,asctime(gmtime(&temptp)), MAXTIME);
             currenttime[strlen(currenttime) - 1] = '\0';
 
-            modifiedtime = ctime(&(buf.st_mtim.tv_sec));
+            strncpy(modifiedtime,ctime(&(buf.st_mtim.tv_sec)), MAXTIME);
             modifiedtime[strlen(modifiedtime) - 1] = '\0';
             snprintf(header, MAXREQUEST, "HTTP/1.1 200 OK \r\n"
                     "MIME-Version: 1.0\r\n"
                     "Date: %s\r\n"
                     "Last-Modified: %s\r\n"
                     "Server: liso/1.0\r\n"
-                    "Trasfer-Encoding: chunked\r\n"
-                    "Connection: close\r\n",
+                    "Trasfer-Encoding: chunked\r\n",
                     currenttime, modifiedtime);
             int headerlen;
             headerlen = strlen(header);
@@ -177,7 +176,6 @@ void method_handle(int connfd, char *requestline, int method)
                     serve_dynamic(connfd, index_file, header);
                 } else {
                     int readnum;
-                    fstat(wfilefd, &buf);
                     content_len = buf.st_size;
                     /* Get extension of file name to fill content-type header */
                     for(i = strlen(index_file) - 1; i >= 0; i--)
@@ -224,13 +222,20 @@ void method_handle(int connfd, char *requestline, int method)
                 continue;
             } else {
                 contentlen = atoi(lenstr);
-            }
+            } 
+        } else if (startwith(readbuf, "close:")) {
+            char *constr = strchr(readbuf, ':');
+            *constr = '\0';
+            constr++;
+            constr = igspace(constr);
+            constr = strtolower(constr);
+            endconnect = (strcmp(constr, "close") == 0);
         }
     }
     read(connfd, readbuf, contentlen);
 
     while(readfeedline(connfd, readbuf, MAXBUF) > 2);
-    close(connfd);
+        close(connfd);
 }
 
 #define MAXPATH 255

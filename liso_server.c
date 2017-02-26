@@ -241,8 +241,10 @@ int request_handle(int connfd)
 {	    
     char line[MAXLINE], method[MAXMETHOD], *reason;
     int i, methodtype;
+    reason = NULL;
 
-    readfeedline(connfd, line, MAXLINE);  
+    if (readfeedline(connfd, line, MAXLINE) < 2)
+        return 0; /* In case some null read */
     fprintf(accesslog, "%s", line);
     fflush(accesslog);
     i = 0;
@@ -293,8 +295,6 @@ int request_handle(int connfd)
             break;
         case UNKNOWN:
         default:
-            reason = "Bad-Request";
-            fprintf(accesslog, "Bad re:%s\n", line);
             abnormal_response(connfd, 400, reason);
             break;
     }
@@ -308,6 +308,10 @@ int main(int argc, char* argv[])
     socklen_t cli_size;
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
+
+#ifndef DEBUG
+    daemonize("lisolog");
+#endif
 
     accesslog = fopen("access.log", "w+");
     if (accesslog == NULL) {

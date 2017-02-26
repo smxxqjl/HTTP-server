@@ -19,11 +19,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include "readline.h"
 #include <fcntl.h>
 #include <time.h>
-#include "hash.h"
-#include "strloc.h"
+#include "liso.h"
 
 #define CRLF "\r\n"
 #define MAXREQUEST 8192
@@ -66,7 +64,7 @@ void abnormal_response(int connfd, int status_code, char *reason)
 {
     char response[MAXERROR];
 
-    snprintf(response, MAXERROR, "HTTP/1.0 %d %s\r\n"
+    snprintf(response, MAXERROR, "HTTP/1.1 %d %s\r\n"
             "\r\n"
             ,status_code, reason);
     writen(connfd, response, strlen(response));
@@ -167,34 +165,33 @@ int method_handle(int connfd, char *requestline, int method)
                     currenttime, modifiedtime);
             int headerlen;
             headerlen = strlen(header);
-            if (method == GET || method == POST) {
-                if (startwith(index_file, "cgi")) {
+            if (startwith(index_file, "cgi")) {
+                if (method == GET || method == POST) 
                     serve_dynamic(connfd, index_file, header);
-                } else {
-                    int readnum;
-                    content_len = buf.st_size;
-                    /* Get extension of file name to fill content-type header */
-                    for(i = strlen(index_file) - 1; i >= 0; i--)
-                        if (index_file[i] == '.')
-                            break;
+            } else {
+                int readnum;
+                content_len = buf.st_size;
+                /* Get extension of file name to fill content-type header */
+                for(i = strlen(index_file) - 1; i >= 0; i--)
+                    if (index_file[i] == '.')
+                        break;
 
-                    char *ext = index_file+i+1;
-                    struct nlist *type = lookup(ext);
-                    char mime_name[MAXLINE];
-                    if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
-                        strncpy(mime_name, "application/octet-stream", MAXLINE);
-                    else
-                        strncpy(mime_name, type->defn, MAXLINE);
+                char *ext = index_file+i+1;
+                struct nlist *type = lookup(ext);
+                char mime_name[MAXLINE];
+                if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
+                    strncpy(mime_name, "application/octet-stream", MAXLINE);
+                else
+                    strncpy(mime_name, type->defn, MAXLINE);
 
-                    snprintf(header + headerlen, MAXREQUEST - headerlen,
-                            "Content-Length: %d\r\n"
-                            "Content-Type: %s\r\n"
-                            "\r\n", content_len, mime_name);
-                    writen(connfd, header, strlen(header));
+                snprintf(header + headerlen, MAXREQUEST - headerlen,
+                        "Content-Length: %d\r\n"
+                        "Content-Type: %s\r\n"
+                        "\r\n", content_len, mime_name);
+                writen(connfd, header, strlen(header));
+                if (method == GET || method == POST)
                     while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
                         writen(connfd, readbuf, readnum);
-                }
-
             }
         }
         else {
@@ -297,6 +294,7 @@ int request_handle(int connfd)
         case UNKNOWN:
         default:
             reason = "Bad-Request";
+            fprintf(accesslog, "Bad re:%s\n", line);
             abnormal_response(connfd, 400, reason);
             break;
     }

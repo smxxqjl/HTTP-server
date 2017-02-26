@@ -1,6 +1,6 @@
 #include<string.h>
 #include<stdlib.h>
-#include"hash.h"
+#include"liso.h"
 
 #define HASHSIZE 101
 

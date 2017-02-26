@@ -1,13 +1,9 @@
 /******************************************************************************
- * echo_server.c                                                               *
+ * liso_server.c                                                               *
  *                                                                             *
- * Description: This file contains the C source code for an echo server.  The  *
- *              server runs on a hard-coded port and simply write back anything*
- *              sent to it by connected clients.  It does not support          *
- *              concurrent clients.                                            *
  *                                                                             *
- * Authors: Athula Balachandran <abalacha@cs.cmu.edu>,                         *
- *          Wolf Richter <wolf@cs.cmu.edu>                                     *
+ * Authors: smxxqjl <smxxqjl@gmail.com>,                                       *
+ *                                                                             *
  *                                                                             *
  *******************************************************************************/
 
@@ -121,7 +117,7 @@ char *printheader(int contentlen)
 #define MAXBUF 1024
 #define MAXTIME 50
 FILE *accesslog;
-void method_handle(int connfd, char *requestline, int method)
+int method_handle(int connfd, char *requestline, int method)
 {
     int i, j, content_len, wfilefd, endconnect;
     char path[MAXPATH], *index_file, *reason, readbuf[MAXBUF], header[MAXREQUEST], currenttime[MAXTIME];
@@ -209,6 +205,7 @@ void method_handle(int connfd, char *requestline, int method)
     int contentlen;
     contentlen = 0;
     while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
+        printf("header is %s\n", readbuf);
         strtolower(readbuf);
         if (startwith(readbuf, "content-length:")) {
             char *lenstr = strchr(readbuf, ':');
@@ -232,16 +229,18 @@ void method_handle(int connfd, char *requestline, int method)
             endconnect = (strcmp(constr, "close") == 0);
         }
     }
-    read(connfd, readbuf, contentlen);
+    if (readn(connfd, readbuf, contentlen) != contentlen)
+        perror("Connfd read error\n");
 
-    while(readfeedline(connfd, readbuf, MAXBUF) > 2);
+    if (endconnect)
         close(connfd);
+    return endconnect;
 }
 
 #define MAXPATH 255
 #define MAXBUF 1024
 #define MAXLINE 1024
-void request_handle(int connfd)
+int request_handle(int connfd)
 {	    
     char line[MAXLINE], method[MAXMETHOD], *reason;
     int i, methodtype;
@@ -279,13 +278,13 @@ void request_handle(int connfd)
     }
     switch(methodtype) {
         case GET:
-            method_handle(connfd, line, GET);
+            return method_handle(connfd, line, GET);
             break;
         case HEAD:
-            method_handle(connfd, line, HEAD);
+            return method_handle(connfd, line, HEAD);
             break;
         case POST:
-            method_handle(connfd, line, POST);
+            return method_handle(connfd, line, POST);
             break;
         case OPTIONS:
         case PUT:
@@ -301,6 +300,8 @@ void request_handle(int connfd)
             abnormal_response(connfd, 400, reason);
             break;
     }
+    close(connfd);
+    return 1;
 }
 
 int main(int argc, char* argv[])
@@ -408,7 +409,8 @@ int main(int argc, char* argv[])
             if ((client_sock = client[i]) < 0)
                 continue;
             if (FD_ISSET(client_sock, &rset)) {
-                request_handle(client_sock);
+                if (request_handle(client_sock) != 0)
+                    client[i] = -1;
                 if (--nready <= 0)
                     break;  /* no more ready socket */
             }

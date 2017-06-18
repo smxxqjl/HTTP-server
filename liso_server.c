@@ -65,8 +65,10 @@ void abnormal_response(int connfd, int status_code, char *reason)
     char response[MAXERROR];
 
     snprintf(response, MAXERROR, "HTTP/1.1 %d %s\r\n"
-            "\r\n"
-            ,status_code, reason);
+            "Content-Length: %d\r\n"
+            "Content-Type: text/html\r\n"
+            "\r\n %s"
+            ,status_code, reason, (int)strlen(reason), reason);
     writen(connfd, response, strlen(response));
 }
 
@@ -87,18 +89,40 @@ void install_mime()
     }
 }
 
+                  
+#define MAXARGS 100
 void serve_dynamic(int connfd, char *exepath, char *header)
 {
-    int pid;
+    int pid, i;
+    char *argv[MAXARGS];
 
-    writen(connfd, header, strlen(header));
+    /*
+     * No need to produce the header in server code
+     * CGI script will generate automatically
+     * writen(connfd, header, strlen(header));
+     */
+
+    /* argument parsing */
+    char *p = strchr(exepath, '?');
+    i = 0;
+    argv[i++] = exepath;
+    if (p != NULL) {
+        do {
+            if (i >= MAXARGS - 1)
+                fprintf(stderr, "Too many argv for the script\n");
+            *p++ = '\0';  /* Chop out last string */
+            argv[i++] = p;
+        }while((p = strchr(p, '&')) != NULL);
+    }
+    argv[i] = NULL;
+
     if ((pid = fork()) == 0) {
         dup2(connfd, STDOUT_FILENO);
         setenv("SERVER_SOFTWARE", "Liso/1.0", 1);
-        execl(exepath, exepath, NULL);
+        execv(exepath, argv);
+        fprintf(stderr, "Execv error\n");
         abnormal_response(connfd, 500, "Internal Server Error");
     }
-    wait(NULL);
 }
 
 /*
@@ -143,7 +167,10 @@ int method_handle(int connfd, char *requestline, int method)
 
     /* check permission and write back response */
     reason = "Unauthorized";
-    if (access(index_file, F_OK) != 0)
+    if (startwith(index_file, "cgi")) {
+        serve_dynamic(connfd, index_file, header);
+    }
+    else if (access(index_file, F_OK) != 0)
         abnormal_response(connfd, 404, reason);
     else {
         struct stat buf;
@@ -165,34 +192,29 @@ int method_handle(int connfd, char *requestline, int method)
                     currenttime, modifiedtime);
             int headerlen;
             headerlen = strlen(header);
-            if (startwith(index_file, "cgi")) {
-                if (method == GET || method == POST) 
-                    serve_dynamic(connfd, index_file, header);
-            } else {
-                int readnum;
-                content_len = buf.st_size;
-                /* Get extension of file name to fill content-type header */
-                for(i = strlen(index_file) - 1; i >= 0; i--)
-                    if (index_file[i] == '.')
-                        break;
+            int readnum;
+            content_len = buf.st_size;
+            /* Get extension of file name to fill content-type header */
+            for(i = strlen(index_file) - 1; i >= 0; i--)
+                if (index_file[i] == '.')
+                    break;
 
-                char *ext = index_file+i+1;
-                struct nlist *type = lookup(ext);
-                char mime_name[MAXLINE];
-                if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
-                    strncpy(mime_name, "application/octet-stream", MAXLINE);
-                else
-                    strncpy(mime_name, type->defn, MAXLINE);
+            char *ext = index_file+i+1;
+            struct nlist *type = lookup(ext);
+            char mime_name[MAXLINE];
+            if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
+                strncpy(mime_name, "application/octet-stream", MAXLINE);
+            else
+                strncpy(mime_name, type->defn, MAXLINE);
 
-                snprintf(header + headerlen, MAXREQUEST - headerlen,
-                        "Content-Length: %d\r\n"
-                        "Content-Type: %s\r\n"
-                        "\r\n", content_len, mime_name);
-                writen(connfd, header, strlen(header));
-                if (method == GET || method == POST)
-                    while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
-                        writen(connfd, readbuf, readnum);
-            }
+            snprintf(header + headerlen, MAXREQUEST - headerlen,
+                    "Content-Length: %d\r\n"
+                    "Content-Type: %s\r\n"
+                    "\r\n", content_len, mime_name);
+            writen(connfd, header, strlen(header));
+            if (method == GET || method == POST)
+                while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
+                    writen(connfd, readbuf, readnum);
         }
         else {
             abnormal_response(connfd, 404, reason);

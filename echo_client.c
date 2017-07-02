@@ -59,10 +59,11 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
         
-    char msg[BUF_SIZE]; 
-    fgets(msg, BUF_SIZE, stdin);
+    char *msg; 
+    char readbuf[BUF_SIZE];
     
     int bytes_received;
+    msg = "POST /cgi/login HTTP/1.1\r\nContent-length: 23\r\n\r\nusername=xx&password=xx\r\n";
     fprintf(stdout, "Sending %s", msg);
     send(sock, msg , strlen(msg), 0);
     if((bytes_received = recv(sock, buf, BUF_SIZE, 0)) > 1)

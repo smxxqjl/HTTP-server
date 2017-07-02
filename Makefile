@@ -13,12 +13,12 @@ DFLAGS = -g
 default: lisod echo_client
 
 lisod: liso_server.c readline.c hash.c strloc.c daemonize.c
-	gcc liso_server.c readline.c hash.c strloc.c daemonize.c -o $@ ${CFLAGS}
+	gcc liso_server.c readline.c hash.c strloc.c daemonize.c -o $@ ${CFLAGS} ${DFLAGS}
 
 echo_client: echo_client.c
 	gcc echo_client.c -o $@ ${CFLAGS}
 
-liso_debug: liso_server.c
+liso_debug: liso_server.c readline.c
 	gcc liso_server.c readline.c hash.c strloc.c daemonize.c -DDEBUG -o $@ ${CFLAGS} ${DFLAGS}
 
 

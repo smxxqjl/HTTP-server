@@ -13,7 +13,7 @@ int startwith(char *str, char *prefix)
     if (len < prelen)
         return 0;
     for (i = 0; i < prelen; i++)
-        if (str[i] != prefix[i])
+        if (tolower(str[i]) != tolower(prefix[i]))
             return 0;
     return 1;
 }

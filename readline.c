@@ -6,7 +6,7 @@ static int read_cnt;
 static char *read_ptr;
 static char read_buf[MAXLINE];
 
-static ssize_t my_read(int fd, char *ptr)
+ssize_t my_read(int fd, char *ptr)
 {
     if(read_cnt <= 0) {
 again:
@@ -78,7 +78,7 @@ ssize_t readaline(int fd, void *vptr, size_t  maxlen)
 
     ptr = vptr;
     for(n = 1; n < maxlen; n++) {
-        if((rc = my_read(fd, &c)) == 1) {
+        if((rc = read(fd, &c, 1)) == 1) {
             *ptr++ = c;
             if(c == '\n')
                 break;
@@ -103,7 +103,7 @@ ssize_t readfeedline(int fd, void *vptr, size_t maxlen)
 
     ptr = vptr;
     for(n = 1; n < maxlen; n++) {
-        if((rc = my_read(fd, &c)) == 1) {
+        if((rc = read(fd, &c, 1)) == 1) {
             *ptr++ = c;
             if(c == '\r') {
                 carryflag = 1;

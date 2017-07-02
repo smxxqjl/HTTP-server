@@ -22,10 +22,14 @@
 #include <fcntl.h>
 #include <time.h>
 #include "liso.h"
+#include <strings.h>
+#include <netinet/tcp.h>
+#include <netinet/in.h>
 
 #define CRLF "\r\n"
 #define MAXREQUEST 8192
 #define MAXLINE 1024
+#define MAXBUF 1024
 
 /* The longest method name is 6 char hence include null terminator we make it 7 */
 #define MAXMETHOD 8
@@ -42,6 +46,14 @@
 #define LISO_PORT 9999
 #define BUF_SIZE 4096
 // Maximum number of file descriptor that server can handle
+
+//TODO: Add arguments for request method
+void setup_environ() {
+    setenv("SERVER_NAME", "127.0.0.1", 1);
+    setenv("GATEWAY_INTERFACE", "CGI/1.1", 1);
+    setenv("SERVER_PROTOCOL", "HTTP/1.1", 1);
+    setenv("SERVER_PORT", "9999", 1);
+}
 
 void not_found(int connfd)
 {
@@ -104,6 +116,7 @@ void serve_dynamic(int connfd, char *exepath, char *header)
 
     /* argument parsing */
     char *p = strchr(exepath, '?');
+
     i = 0;
     argv[i++] = exepath;
     if (p != NULL) {
@@ -119,7 +132,9 @@ void serve_dynamic(int connfd, char *exepath, char *header)
     if ((pid = fork()) == 0) {
         dup2(connfd, STDOUT_FILENO);
         setenv("SERVER_SOFTWARE", "Liso/1.0", 1);
-        execv(exepath, argv);
+        setenv("PATH_INFO", exepath, 1);
+        setup_environ();
+        execv("flaskr/wsgi_wrapper.py", argv);
         fprintf(stderr, "Execv error\n");
         abnormal_response(connfd, 500, "Internal Server Error");
     }
@@ -136,7 +151,6 @@ char *printheader(int contentlen)
 }
 
 #define MAXPATH 255
-#define MAXBUF 1024
 #define MAXTIME 50
 FILE *accesslog;
 int method_handle(int connfd, char *requestline, int method)
@@ -165,14 +179,67 @@ int method_handle(int connfd, char *requestline, int method)
     else
         index_file = path+i;
 
+    char *query_str = strchr(path, '?');
+    if (query_str != NULL) {
+        setenv("QUERY_STRING", query_str, 1);
+        printf("Set query string to %s\n", readbuf);
+    }
+    int contentlen;
+    contentlen = 0;
+    int re = 0;
+    printf("Request Header:\n");
+    while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
+        printf("header is %s", readbuf);
+        //strtolower(readbuf);
+        if (startwith(readbuf, "content-length:")) {
+            char *lenstr = strchr(readbuf, ':');
+            *lenstr = '\0';
+            lenstr++;
+            char *p = strchr(lenstr, '\r');
+            *p = '\0';
+            lenstr = igspace(lenstr);
+            if (strlen(lenstr) == 0 || !isinteger(lenstr)) {
+                fprintf(stderr, "Bad Header\n %s\n", lenstr);
+                continue;
+            } else {
+                contentlen = atoi(lenstr);
+            } 
+        } else if (startwith(readbuf, "close:")) {
+            char *constr = strchr(readbuf, ':');
+            *constr = '\0';
+            constr++;
+            constr = igspace(constr);
+            constr = strtolower(constr);
+            endconnect = (strcmp(constr, "close") == 0);
+        } else if (startwith(readbuf, "cookie")) {
+            char *constr = strchr(readbuf, ':');
+            *constr = '\0';
+            constr++;
+            constr = igspace(constr);
+            char *temp = strchr(constr, '\r');
+            *temp = '\0';
+            setenv("HTTP_COOKIE", constr, 1);
+            printf("Set cookie constr %s\n", constr);
+        }
+    }
+
+    if((re = readn(connfd, readbuf, contentlen)) != contentlen){
+        perror("Connfd read error\n");
+    }
+    readbuf[contentlen] = '\0';
+    if (re != 0) {
+        setenv("QUERY_STRING", readbuf, 1);
+        printf("Set query string to %s\n", readbuf);
+    }
+    printf("Body is %s \n", readbuf);
+
     /* check permission and write back response */
     reason = "Unauthorized";
     if (startwith(index_file, "cgi")) {
         serve_dynamic(connfd, index_file, header);
-    }
-    else if (access(index_file, F_OK) != 0)
+    } else if (access(index_file, F_OK) != 0) {
         abnormal_response(connfd, 404, reason);
-    else {
+    } else {
         struct stat buf;
         if (access(index_file, R_OK) == 0 && (wfilefd = open(index_file, O_RDONLY)) != -1) {
             time_t temptp;
@@ -187,7 +254,7 @@ int method_handle(int connfd, char *requestline, int method)
                     "MIME-Version: 1.0\r\n"
                     "Date: %s\r\n"
                     "Last-Modified: %s\r\n"
-                    "Server: liso/1.0\r\n"
+                    "Server: Lisoss/1.0\r\n"
                     "Trasfer-Encoding: chunked\r\n",
                     currenttime, modifiedtime);
             int headerlen;
@@ -220,37 +287,6 @@ int method_handle(int connfd, char *requestline, int method)
             abnormal_response(connfd, 404, reason);
         }
     }
-
-    int contentlen;
-    contentlen = 0;
-    while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
-        printf("header is %s\n", readbuf);
-        strtolower(readbuf);
-        if (startwith(readbuf, "content-length:")) {
-            char *lenstr = strchr(readbuf, ':');
-            *lenstr = '\0';
-            lenstr++;
-            lenstr = igspace(lenstr);
-            char *p = strchr(lenstr, '\n');
-            *p = '\0';
-            if (strlen(lenstr) == 0 || !isinteger(lenstr)) {
-                fprintf(stderr, "Bad Header\n %s\n", lenstr);
-                continue;
-            } else {
-                contentlen = atoi(lenstr);
-            } 
-        } else if (startwith(readbuf, "close:")) {
-            char *constr = strchr(readbuf, ':');
-            *constr = '\0';
-            constr++;
-            constr = igspace(constr);
-            constr = strtolower(constr);
-            endconnect = (strcmp(constr, "close") == 0);
-        }
-    }
-    if (readn(connfd, readbuf, contentlen) != contentlen)
-        perror("Connfd read error\n");
-
     if (endconnect)
         close(connfd);
     return endconnect;
@@ -278,6 +314,7 @@ int request_handle(int connfd)
         methodtype = UNKNOWN;
     else {
         method[i] = '\0';
+        setenv("REQUEST_METHOD", method, 1);
         if (strcasecmp(method, "OPTIONS") == 0)
             methodtype = OPTIONS;
         else if (strcasecmp(method, "GET") == 0)
@@ -317,6 +354,7 @@ int request_handle(int connfd)
             break;
         case UNKNOWN:
         default:
+            reason = "Unknown method";
             abnormal_response(connfd, 400, reason);
             break;
     }
@@ -326,7 +364,7 @@ int request_handle(int connfd)
 
 int main(int argc, char* argv[])
 {
-    int sock, client_sock, i, maxi, maxfd, nready, lport, reuse;
+    int sock, client_sock, i, maxi, maxfd, nready, lport, flag;
     socklen_t cli_size;
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
@@ -363,10 +401,16 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Failed creating socket.\n");
         return EXIT_FAILURE;
     }
-    if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&reuse, sizeof(int)) == -1)
+    /*
+    if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&flag, sizeof(int)) == -1)
     {                                                                               
         perror("resuse error\n");
     } 
+    */
+    flag = 1;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) == -1) {
+        printf("Nodelay error\n");
+    }
     addr.sin_family = AF_INET;
     addr.sin_port = htons(lport);
     addr.sin_addr.s_addr = INADDR_ANY;

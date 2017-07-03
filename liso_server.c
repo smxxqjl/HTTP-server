@@ -7,6 +7,7 @@
  *                                                                             *
  *******************************************************************************/
 
+#include <openssl/ssl.h>
 #include <ctype.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -47,6 +48,8 @@
 #define BUF_SIZE 4096
 // Maximum number of file descriptor that server can handle
 
+ssize_t ssl_readfeedline(SSL *fd, void *vptr, size_t maxlen);
+void ssl_select(struct sockaddr_in);
 //TODO: Add arguments for request method
 void setup_environ() {
     setenv("SERVER_NAME", "127.0.0.1", 1);
@@ -101,7 +104,7 @@ void install_mime()
     }
 }
 
-                  
+
 #define MAXARGS 100
 void serve_dynamic(int connfd, char *exepath, char *header)
 {
@@ -369,6 +372,7 @@ int main(int argc, char* argv[])
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
 
+    install_mime();
 #ifndef DEBUG
     daemonize("lisolog");
 #endif
@@ -390,7 +394,10 @@ int main(int argc, char* argv[])
             lport = atoi(argv[1]);
     }
 
-    install_mime();
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(lport);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    ssl_select(addr);
     int client[FD_SETSIZE];
     for (i = 0; i < FD_SETSIZE; i++)
         client[i] = -1;
@@ -402,18 +409,15 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
     /*
-    if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&flag, sizeof(int)) == -1)
-    {                                                                               
-        perror("resuse error\n");
-    } 
-    */
+       if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&flag, sizeof(int)) == -1)
+       {                                                                               
+       perror("resuse error\n");
+       } 
+       */
     flag = 1;
     if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) == -1) {
         printf("Nodelay error\n");
     }
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(lport);
-    addr.sin_addr.s_addr = INADDR_ANY;
 
     /* servers bind sockets to ports---notify the OS they accept connections */
     if (bind(sock, (struct sockaddr *) &addr, sizeof(addr)))
@@ -457,11 +461,7 @@ int main(int argc, char* argv[])
                     break;
                 }
             }
-            if (i == FD_SETSIZE) {
-                fprintf(stderr, "too many clients.\n");
-                return EXIT_FAILURE;
-            }
-
+            if (i == FD_SETSIZE) { fprintf(stderr, "too many clients.\n"); return EXIT_FAILURE; } 
             FD_SET(client_sock, &allset);
 
             if (client_sock > maxfd)
@@ -485,4 +485,272 @@ int main(int argc, char* argv[])
         }
     }
     return EXIT_SUCCESS;
+}
+void ssl_abnormal_response(SSL* connfd, int status_code, char *reason)
+{
+    char response[MAXERROR];
+
+    snprintf(response, MAXERROR, "HTTP/1.1 %d %s\r\n"
+            "Content-Length: %d\r\n"
+            "Content-Type: text/html\r\n"
+            "\r\n %s"
+            ,status_code, reason, (int)strlen(reason), reason);
+    SSL_write(connfd, response, strlen(response));
+}
+
+int ssl_method_handle(SSL* cli_context, char *requestline)
+{
+    int i, j, content_len, wfilefd, endconnect;
+    char path[MAXPATH], *index_file, *reason, readbuf[MAXBUF], header[MAXREQUEST], currenttime[MAXTIME];
+    char modifiedtime[MAXTIME];
+    i = j = endconnect = 0;
+
+    printf("Request:%s\n", requestline);
+    /* Ignore method and space */
+    while(requestline[i++] != ' ');
+    i++;
+
+    while(requestline[i] != ' ') {
+        path[j++] = requestline[i++];
+    }
+    path[j] = '\0';
+
+    for(i = 0; i < j; i++) {
+        if (path[i] != '/')
+            break;
+    }
+    if (i == j)
+        index_file = "index.html";
+    else
+        index_file = path+i;
+
+    printf("SSL index file is %s\n", index_file);
+    char *query_str = strchr(path, '?');
+    if (query_str != NULL) {
+        setenv("QUERY_STRING", query_str, 1);
+        printf("Set query string to %s\n", readbuf);
+    }
+
+    /* check permission and write back response */
+    if (access(index_file, F_OK) != 0) {
+        reason = "Not Found";
+        ssl_abnormal_response(cli_context, 404, reason);
+    } else {
+        struct stat buf;
+        if (access(index_file, R_OK) == 0 && (wfilefd = open(index_file, O_RDONLY)) != -1) {
+            time_t temptp;
+            time(&temptp);
+            fstat(wfilefd, &buf);
+            strncpy(currenttime,asctime(gmtime(&temptp)), MAXTIME);
+            currenttime[strlen(currenttime) - 1] = '\0';
+
+            strncpy(modifiedtime,ctime(&(buf.st_mtim.tv_sec)), MAXTIME);
+            modifiedtime[strlen(modifiedtime) - 1] = '\0';
+            snprintf(header, MAXREQUEST, "HTTP/1.1 200 OK \r\n"
+                    "MIME-Version: 1.0\r\n"
+                    "Date: %s\r\n"
+                    "Last-Modified: %s\r\n"
+                    "Server: Lisoss/1.0\r\n"
+                    "Trasfer-Encoding: chunked\r\n",
+                    currenttime, modifiedtime);
+            int headerlen;
+            headerlen = strlen(header);
+            int readnum;
+            content_len = buf.st_size;
+            /* Get extension of file name to fill content-type header */
+            for(i = strlen(index_file) - 1; i >= 0; i--)
+                if (index_file[i] == '.')
+                    break;
+
+            char *ext = index_file+i+1;
+            printf("ext is %s\n", ext);
+            struct nlist *type = lookup(ext);
+            char mime_name[MAXLINE];
+            if (type == NULL || i < 0) /* no extension or corresponding MIME-type name is found */
+                strncpy(mime_name, "application/octet-stream", MAXLINE);
+            else
+                strncpy(mime_name, type->defn, MAXLINE);
+            printf("type is %s\n", mime_name);
+
+            snprintf(header + headerlen, MAXREQUEST - headerlen,
+                    "Content-Length: %d\r\n"
+                    "Content-Type: %s\r\n"
+                    "\r\n", content_len, mime_name);
+            SSL_write(cli_context, header, strlen(header));
+            while ((readnum = read(wfilefd, &readbuf, MAXBUF)) != 0)
+                SSL_write(cli_context, readbuf, readnum);
+        }
+        else {
+            reason = "xx";
+            ssl_abnormal_response(cli_context, 404, reason);
+        }
+    }
+    return 0;
+}
+
+int ssl_request_handle(SSL *client_context) {
+    char buf[BUF_SIZE], line[BUF_SIZE];
+    int first = 1;
+
+    while (ssl_readfeedline(client_context, buf, BUF_SIZE) > 2) {
+        if (first) {
+            first = 0;
+            strcpy(line, buf);
+        }
+        printf("Wow Using ssl read something %s\n", buf);
+        bzero(buf, MAXBUF);
+    }
+    ssl_method_handle(client_context, line);
+    return 1;
+}
+
+void ssl_select(struct sockaddr_in addr) 
+{
+    int clients[FD_SETSIZE];
+    SSL_CTX *ssl_context;
+    SSL *client_context_set[FD_SETSIZE], *client_context;
+    fd_set rset, allset;
+    int maxfd, maxi, i, client_sock, acceptfd;
+    struct sockaddr_in cli_addr;
+    socklen_t cli_size;
+
+    for (i = 0; i < FD_SETSIZE; i++) {
+        client_context_set[i] = NULL;
+        clients[i] = -1;
+    }
+    maxi = -1;
+
+
+    SSL_load_error_strings();
+    SSL_library_init();
+
+    /* we want to use TLSv1 only */
+    if ((ssl_context = SSL_CTX_new(TLSv1_server_method())) == NULL)
+    {
+        fprintf(stderr, "Error creating SSL context.\n");
+        exit(1);
+    }
+
+    /* register private key */
+    if (SSL_CTX_use_PrivateKey_file(ssl_context, "private/myca.key",
+                SSL_FILETYPE_PEM) == 0)
+    {
+        SSL_CTX_free(ssl_context);
+        fprintf(stderr, "Error associating private key.\n");
+        exit(1);
+    }
+
+    /* register public key (certificate) */
+    if (SSL_CTX_use_certificate_file(ssl_context, "certs/myca.crt",
+                SSL_FILETYPE_PEM) == 0)
+    {
+        SSL_CTX_free(ssl_context);
+        fprintf(stderr, "Error associating certificate.\n");
+        exit(1);
+    }
+    /************ END SSL INIT ************/
+
+    if ((acceptfd = socket(PF_INET, SOCK_STREAM, 0)) == -1)
+    {
+        SSL_CTX_free(ssl_context);
+        fprintf(stderr, "Failed creating socket.\n");
+        exit(1);
+    }
+    FD_ZERO(&allset);
+    FD_SET(acceptfd, &allset);
+    maxfd = acceptfd;
+
+    if (bind(acceptfd, (struct sockaddr *) &addr, sizeof(addr)))
+    {
+        close_socket(acceptfd);
+        SSL_CTX_free(ssl_context);
+        fprintf(stderr, "Failed binding socket.\n");
+        exit(1);
+    }
+
+    if (listen(acceptfd, 5))
+    {
+        close_socket(acceptfd);
+        SSL_CTX_free(ssl_context);
+        fprintf(stderr, "Error listening on socket.\n");
+        exit(1);
+    }
+    /************ SERVER SOCKET SETUP ************/
+    while(1) {
+        rset = allset;
+        int nready = select(maxfd + 1, &rset, NULL, NULL, NULL);
+
+        if (FD_ISSET(acceptfd, &rset)) {
+            cli_size = sizeof(cli_addr);
+            if ((client_sock = accept(acceptfd, (struct sockaddr *) &cli_addr,
+                            &cli_size)) == -1) {
+                close(acceptfd);
+                SSL_CTX_free(ssl_context);
+                fprintf(stderr, "Error accepting connection.\n");
+                exit(1);
+            }
+            for (i = 0; i < FD_SETSIZE; i++) {
+                if (clients[i] < 0) {
+                    clients[i] = client_sock;
+                    break;
+                }
+            }
+            if (i == FD_SETSIZE) {
+                fprintf(stderr, "too many clients.\n");
+                exit(1);
+            }
+
+            if ((client_context = SSL_new(ssl_context)) == NULL)
+            {
+                close(acceptfd);
+                SSL_CTX_free(ssl_context);
+                fprintf(stderr, "Error creating client SSL context.\n");
+                exit(1);
+            }
+            if (SSL_set_fd(client_context, client_sock) == 0)
+            {
+                close(acceptfd);
+                SSL_free(client_context);
+                SSL_CTX_free(ssl_context);
+                fprintf(stderr, "Error creating client SSL context.\n");
+                exit(1);
+            }  
+
+            if (SSL_accept(client_context) <= 0)
+            {
+                close(acceptfd);
+                SSL_free(client_context);
+                SSL_CTX_free(ssl_context);
+                fprintf(stderr, "Error accepting (handshake) client SSL context.\n");
+                exit(1);
+            }
+            client_context_set[i] = client_context;
+            FD_SET(clients[i], &allset);
+
+            if (client_sock > maxfd) {
+                maxfd = client_sock;
+            }
+            if (i > maxi) {
+                maxi = i;
+            }
+            if (--nready <= 0)
+                continue;
+        }
+
+        for (i = 0; i <= maxi; i++) {
+            if (clients[i] < 0) {
+                continue;
+            }
+            if (FD_ISSET(clients[i], &rset)) {
+                if (ssl_request_handle(client_context_set[i]) == 1) {
+                    SSL_free(client_context_set[i]);
+                    client_context_set[i] = NULL;
+                    close(clients[i]);
+                    clients[i] = -1;
+                }
+                if (--nready <= 0)
+                    break;
+            }
+        }
+    }
 }

@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <errno.h>
+#include <openssl/ssl.h>
 
 #define MAXLINE 2048
 static int read_cnt;
@@ -104,6 +105,36 @@ ssize_t readfeedline(int fd, void *vptr, size_t maxlen)
     ptr = vptr;
     for(n = 1; n < maxlen; n++) {
         if((rc = read(fd, &c, 1)) == 1) {
+            *ptr++ = c;
+            if(c == '\r') {
+                carryflag = 1;
+                continue;
+            }
+            else if (carryflag && c == '\n')
+                break;
+            carryflag = 0;
+        }
+        else if(rc == 0) {
+            *ptr = 0;
+            return n-1;
+        }
+        else
+            return -1;
+    }
+
+    *ptr = 0;
+    return n-1;
+}
+
+ssize_t ssl_readfeedline(SSL *fd, void *vptr, size_t maxlen)
+{
+    ssize_t n, rc;
+    char c, *ptr;
+    int carryflag;
+
+    ptr = vptr;
+    for(n = 1; n < maxlen; n++) {
+        if((rc = SSL_read(fd, &c, 1)) == 1) {
             *ptr++ = c;
             if(c == '\r') {
                 carryflag = 1;

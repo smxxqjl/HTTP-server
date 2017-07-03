@@ -7,7 +7,7 @@
 #          Wolf Richter <wolf@cs.cmu.edu>                                      #
 #                                                                              #
 ################################################################################
-CFLAGS = -Wall -Werror
+CFLAGS = -Wall -Werror -lssl
 DFLAGS = -g
 
 default: lisod echo_client

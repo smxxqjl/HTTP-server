@@ -7,6 +7,7 @@
  *                                                                             *
  *******************************************************************************/
 
+#include <getopt.h>
 #include <openssl/ssl.h>
 #include <ctype.h>
 #include <netinet/in.h>
@@ -44,9 +45,33 @@
 #define CONNECT 7
 #define UNKNOWN 8
 
+#define MAXPATH 255
 #define LISO_PORT 9999
 #define BUF_SIZE 4096
+#define PORT_LEN 6
 // Maximum number of file descriptor that server can handle
+static int use_ssl = 0;
+static int use_log = 0;
+static int use_daemon = 0;
+static int liso_port = 9999;
+//static int optional_argument = 2;
+static char log_file[MAXPATH] = "log/access.log";
+static char cert_file[MAXPATH] = "certs/myca.crt";
+static char port_ascii[PORT_LEN] = "9999";
+#define GETOPT_SSL 1
+#define GETOPT_LOG 2
+#define GETOPT_PORT 3
+#define GETOPT_HELP 4
+void usage() {
+    printf("Usage: liso_exe_name [OPTIONS]...\n");
+    printf("Running a lightweight HTTP Server.\n");
+    printf("\n");
+    printf("-h, -help, Looking for help?\n");
+    printf("--ssl=[cert_file], run httlps(http over ssl) using specified"
+           "certificate file.\n");
+    printf("-p portnum, --port=portnum running server on specified port.\n");
+    printf("--log=[logfile], generate a access log file as specified.\n");
+}
 
 ssize_t ssl_readfeedline(SSL *fd, void *vptr, size_t maxlen);
 void ssl_select(struct sockaddr_in);
@@ -55,7 +80,7 @@ void setup_environ() {
     setenv("SERVER_NAME", "127.0.0.1", 1);
     setenv("GATEWAY_INTERFACE", "CGI/1.1", 1);
     setenv("SERVER_PROTOCOL", "HTTP/1.1", 1);
-    setenv("SERVER_PORT", "9999", 1);
+    setenv("SERVER_PORT", port_ascii, 1);
 }
 
 void not_found(int connfd)
@@ -153,7 +178,6 @@ char *printheader(int contentlen)
     return NULL;
 }
 
-#define MAXPATH 255
 #define MAXTIME 50
 FILE *accesslog;
 int method_handle(int connfd, char *requestline, int method)
@@ -191,6 +215,7 @@ int method_handle(int connfd, char *requestline, int method)
     contentlen = 0;
     int re = 0;
     printf("Request Header:\n");
+    unsetenv("HTTP_COOKIE");
     while(readfeedline(connfd, readbuf, MAXBUF) > 2) {
         printf("header is %s", readbuf);
         //strtolower(readbuf);
@@ -306,8 +331,10 @@ int request_handle(int connfd)
 
     if (readfeedline(connfd, line, MAXLINE) < 2)
         return 0; /* In case some null read */
-    fprintf(accesslog, "%s", line);
-    fflush(accesslog);
+    if (use_log) {
+        fprintf(accesslog, "%s", line);
+        fflush(accesslog);
+    }
     i = 0;
     while(line[i] != ' ' && line[i] != '\0' && i < MAXMETHOD) {
         method[i] = line[i];
@@ -365,42 +392,85 @@ int request_handle(int connfd)
     return 1;
 }
 
+int start_connect();
 int main(int argc, char* argv[])
 {
-    int sock, client_sock, i, maxi, maxfd, nready, lport, flag;
+    int c;
+
+    static struct option long_options[] = {
+        { "ssl",  optional_argument, NULL, GETOPT_SSL},
+        { "log",  optional_argument, NULL, GETOPT_LOG},
+        { "port", optional_argument, NULL, GETOPT_PORT},
+        { "help", no_argument,       NULL, GETOPT_HELP},
+        {  NULL,                  0, NULL, 0}
+    };
+
+    while((c = getopt_long(argc, argv, "p:dh", long_options, NULL)) != -1) {
+        switch (c) {
+            case GETOPT_SSL:
+                use_ssl = 1;
+                if (optarg != NULL)
+                    strncpy(cert_file, optarg, MAXPATH);
+                break;
+            case GETOPT_LOG:
+                use_log = 1;
+                if (optarg != NULL)
+                    strncpy(log_file, optarg, MAXPATH);
+                break;
+            case GETOPT_PORT:
+            case 'p':
+                if (!isinteger(optarg)) {
+                    fprintf(stderr, "Invalid port number optargs\n");
+                    return 0;
+                }
+                strncpy(port_ascii, optarg, PORT_LEN);
+                liso_port = atoi(optarg);
+                break;
+            case 'd':
+                use_daemon = 1;
+                break;
+            case 'h':
+            case GETOPT_HELP:
+                usage();
+                return 0;
+            case '?':
+            default:
+                return 1;
+        }
+    }
+    if (use_daemon)
+        daemonize("lisolog");
+    if (use_log) {
+        accesslog = fopen(log_file, "w+");
+        if (accesslog == NULL) {
+            perror("Error while opening log_file no log will show.\n");
+            use_log = 0;
+        }
+    }
+
+    start_connect(argc, argv);
+    return 0;
+}
+
+int start_connect()
+{
+    int sock, client_sock, i, maxi, maxfd, nready, flag;
     socklen_t cli_size;
     struct sockaddr_in addr, cli_addr;
     fd_set rset, allset;
 
     install_mime();
-#ifndef DEBUG
-    daemonize("lisolog");
-#endif
 
-    accesslog = fopen("access.log", "w+");
-    if (accesslog == NULL) {
-        perror("open log fille access.log error");
-    }
-    lport = LISO_PORT;
-    if (argc >= 2) {
-        int len = strlen(argv[1]);
-        for (i = 0; i < len; i++) {
-            if (!isdigit(argv[1][i])) {
-                fprintf(stderr, "Unavailable port argv %s Using default port %d",
-                        argv[1], lport);
-            }
-        }
-        if (i == len)
-            lport = atoi(argv[1]);
-    }
 
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(lport);
+    addr.sin_port = htons(liso_port);
     addr.sin_addr.s_addr = INADDR_ANY;
-    ssl_select(addr);
     int client[FD_SETSIZE];
     for (i = 0; i < FD_SETSIZE; i++)
         client[i] = -1;
+
+    if (use_ssl)
+        ssl_select(addr);
 
     /* all networked programs must create a socket */
     if ((sock = socket(PF_INET, SOCK_STREAM, 0)) == -1)
@@ -408,12 +478,10 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Failed creating socket.\n");
         return EXIT_FAILURE;
     }
-    /*
-       if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&flag, sizeof(int)) == -1)
-       {                                                                               
-       perror("resuse error\n");
-       } 
-       */
+    if (setsockopt(sock, SOL_SOCKET,SO_REUSEADDR, (char *)&flag, sizeof(int)) == -1)
+    {                                                                               
+        perror("reuse error\n");
+    } 
     flag = 1;
     if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) == -1) {
         printf("Nodelay error\n");
@@ -592,15 +660,19 @@ int ssl_request_handle(SSL *client_context) {
     char buf[BUF_SIZE], line[BUF_SIZE];
     int first = 1;
 
+    bzero(line, BUF_SIZE);
     while (ssl_readfeedline(client_context, buf, BUF_SIZE) > 2) {
-        if (first) {
+        if (first || strlen(line) == 0) {
             first = 0;
             strcpy(line, buf);
         }
         printf("Wow Using ssl read something %s\n", buf);
+        fflush(stdout);
         bzero(buf, MAXBUF);
     }
-    ssl_method_handle(client_context, line);
+    if (strlen(line) != 0) {
+        ssl_method_handle(client_context, line);
+    }
     return 1;
 }
 

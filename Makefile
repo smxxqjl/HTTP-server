@@ -19,7 +19,7 @@ echo_client: echo_client.c
 	gcc echo_client.c -o $@ ${CFLAGS}
 
 liso_debug: liso_server.c readline.c
-	gcc liso_server.c readline.c hash.c strloc.c daemonize.c -DDEBUG -o $@ ${CFLAGS} ${DFLAGS}
+	gcc liso_server.c readline.c hash.c strloc.c daemonize.c -DDEBUG -o $@ ${DFLAGS} -lssl
 
 
 handin:
